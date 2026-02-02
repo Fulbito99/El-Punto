@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "el-punto-ed260"
+  },
+  "targets": {
+    "el-punto-ed260": {
+      "hosting": {
+        "app": [
+          "el-punto-app"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

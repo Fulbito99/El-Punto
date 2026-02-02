@@ -1,0 +1,60 @@
+[
+  {
+    "id": "4vd2dutu6",
+    "masterStock": 20,
+    "name": "Obleas Bon O Bon Surtidas",
+    "sku": "7790580346508",
+    "category": "ARCOR",
+    "additionalSkus": [
+      "7790580346607",
+      "7790580346515",
+      "7790580346614"
+    ],
+    "expirationDate": "2026-09-18"
+  },
+  {
+    "id": "b5diobz6t",
+    "masterStock": 0,
+    "additionalSkus": [
+      "7790040676800"
+    ],
+    "expirationDate": "2026-11-28",
+    "sku": "17790040676807",
+    "name": "Tortitas Black 125G",
+    "category": "ARCOR"
+  },
+  {
+    "id": "py9sj8faa",
+    "sku": "17790040139937",
+    "expirationDate": "2026-10-03",
+    "category": "ARCOR",
+    "name": "Formis 102G Surtidas",
+    "additionalSkus": [
+      "7790040139930",
+      "17790040139968",
+      "7790040139961"
+    ],
+    "masterStock": 16
+  },
+  {
+    "id": "s7vd8vj3p",
+    "category": "ARCOR",
+    "name": "Mana Rellenas Surtidos",
+    "sku": "7790040133235",
+    "additionalSkus": [
+      "7790040133266",
+      "7790040133242"
+    ],
+    "masterStock": 63,
+    "expirationDate": "2026-09-11"
+  },
+  {
+    "id": "8f1f5bgmk",
+    "sku": "7790040116955",
+    "masterStock": 15,
+    "category": "ARCOR",
+    "name": "Galletas Cofler Block",
+    "expirationDate": "2026-09-17",
+    "additionalSkus": []
+  }
+]
