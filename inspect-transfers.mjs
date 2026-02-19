@@ -1,25 +1,36 @@
 
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, limit, query, orderBy } from "firebase/firestore";
+import { getFirestore, collection, getDocs, limit, query, where, orderBy } from "firebase/firestore";
+import fs from 'fs';
 
+// External Firebase Config (Deposito)
 const externalFirebaseConfig = {
     apiKey: "AIzaSyCKXfqtER1968lTf-t4-PWxDWGmb--dXEA",
     authDomain: "deposito-inventory-f7a1b.firebaseapp.com",
     projectId: "deposito-inventory-f7a1b",
     storageBucket: "deposito-inventory-f7a1b.firebasestorage.app",
-    messagingSenderId: "221074983931",
-    appId: "1:221074983931:web:febc0346ec1d7dc9bed95e"
+    messagingSenderId: "367375252876",
+    appId: "1:367375252876:web:e2b3e8346e438c8230b65f"
 };
 
 const app = initializeApp(externalFirebaseConfig);
 const db = getFirestore(app);
 
 async function inspectTransfers() {
-    console.log(`Inspecting latest 5 transfers...`);
+    console.log(`Inspecting transfers for 'locale-1' (El Punto)...`);
     const transfersRef = collection(db, "transfers");
 
     try {
-        const q = query(transfersRef, orderBy("date", "desc"), limit(5));
+        // Query for locale-1 as destination
+        // Removed orderBy on 'date' as it's a string and might cause index issues if not formatted correctly
+        // Added limit to 500 to catch recent ones
+        // Added orderBy timestamp desc to get recent first
+        const q = query(
+            transfersRef,
+            where('destinationLocaleId', '==', 'locale-1'),
+            orderBy('timestamp', 'desc'),
+            limit(500)
+        );
         const snap = await getDocs(q);
 
         if (!snap.empty) {
@@ -27,25 +38,33 @@ async function inspectTransfers() {
             snap.forEach(doc => {
                 transfers.push({ id: doc.id, ...doc.data() });
             });
-            const fs = await import('fs');
             fs.writeFileSync('transfers_dump.json', JSON.stringify(transfers, null, 2));
-            console.log("Wrote transfers to transfers_dump.json");
+            console.log(`Wrote ${transfers.length} transfers to transfers_dump.json`);
         } else {
-            console.log("No transfers found.");
+            console.log("No transfers found for locale-1.");
         }
     } catch (e) {
-        console.error("QUERY ERROR:", e.message);
-        // Fallback if index missing or date field different
+        console.error("QUERY ERROR:", e);
+
+        // Fallback: Try without orderBy timestamp if index missing
         try {
-            console.log("Retrying without sort...");
-            const q2 = query(transfersRef, limit(5));
-            const snap2 = await getDocs(q2);
-            snap2.forEach(doc => {
-                console.log("------------------------------------------------");
-                console.log("DATA:", JSON.stringify(doc.data(), null, 2));
-            });
+            console.log("Trying fallback query without sort...");
+            const qFallback = query(
+                transfersRef,
+                where('destinationLocaleId', '==', 'locale-1'),
+                limit(500)
+            );
+            const snapFallback = await getDocs(qFallback);
+            if (!snapFallback.empty) {
+                const transfers = [];
+                snapFallback.forEach(doc => {
+                    transfers.push({ id: doc.id, ...doc.data() });
+                });
+                fs.writeFileSync('transfers_dump.json', JSON.stringify(transfers, null, 2));
+                console.log(`Fallback: Wrote ${transfers.length} transfers to transfers_dump.json`);
+            }
         } catch (e2) {
-            console.error(e2);
+            console.error("FALLBACK ERROR:", e2);
         }
     }
 }

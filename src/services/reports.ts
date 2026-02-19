@@ -46,15 +46,17 @@ export const generateReport = (
             const entry = entries.find(e => e.productId === product.id && e.date === date);
             const stock = entry?.stock || 0;
             const ingreso = entry?.ingreso || 0;
+            const egreso = entry?.egreso || 0;
 
             // Get sales for this product on this date
             const productSales = sales.filter(s => s.productId === product.id && s.date === date);
             const ventas = productSales.reduce((sum, s) => sum + s.quantity, 0);
 
             // Calculate día siguiente
+            const egresoCount = product.inventoryType === 'local' ? egreso : 0;
             const diaSiguiente = showSales
-                ? stock + ingreso - ventas
-                : stock + ingreso;
+                ? stock + ingreso - egresoCount - ventas
+                : stock + ingreso - egresoCount;
 
             // Calculate diferencia: Stock(Mañana) - diaSiguiente(Hoy)
             const nextDate = addDays(date, 1);

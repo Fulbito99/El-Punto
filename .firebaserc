@@ -6,7 +6,7 @@
     "el-punto-ed260": {
       "hosting": {
         "app": [
-          "el-punto-app"
+          "el-punto-ed260"
         ]
       }
     }

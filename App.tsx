@@ -45,7 +45,7 @@ import {
 
 import { getCurrentDateAR } from './src/utils/dates';
 import { getConversionFactor } from './src/utils/units';
-import { subscribeToIncomingTransfers } from './src/services/transfers';
+
 import { Transfer } from './types';
 
 
@@ -195,48 +195,14 @@ const App: React.FC = () => {
       endDate: today
     });
 
-    // Subscribe to incoming transfers from Deposito
-    const unsubTransfers = subscribeToIncomingTransfers(async (transfers: Transfer[]) => {
-      // Process each transfer to create/update entries
-      for (const transfer of transfers) {
-        // Check if we already have an entry for this transfer
-        const existingEntry = entries.find(e => e.transferId === transfer.id && e.date === today);
-
-        if (!existingEntry) {
-          // Create new entry from transfer
-          const transferDate = today; // Use today's date for the entry
-
-          await updateEntryService({
-            productId: transfer.productId,
-            date: transferDate,
-            stock: 0,
-            ingreso: transfer.quantity,
-            finalized: false,
-            transferId: transfer.id
-          });
-        }
-      }
-
-      // Check for deleted transfers (entries with transferId but no matching transfer)
-      const transferIds = new Set(transfers.map(t => t.id));
-      const entriesToDelete = entries.filter(e => e.transferId && !transferIds.has(e.transferId));
-
-      // Delete entries for removed transfers
-      for (const entry of entriesToDelete) {
-        // Set ingreso to 0 to remove the transfer's contribution
-        await updateEntryService({
-          ...entry,
-          ingreso: 0,
-          transferId: undefined
-        });
-      }
-    });
+    // Subscribe to incoming transfers from Deposito - MOVED TO InventoryView.tsx using externalDb service
+    // The previous implementation here was incorrect as it pointed to local DB 'transfers' collection which is for internal use or empty.
+    // Real transfers are in the external 'deposito-inventory' project.
 
     return () => {
       unsubCat();
       unsubProd();
       unsubEntries();
-      unsubTransfers();
     };
   }, [user]);
 

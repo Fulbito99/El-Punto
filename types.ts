@@ -19,6 +19,7 @@ export interface DailyEntry {
   date: string; // ISO YYYY-MM-DD
   stock: number; // Conteo real del día
   ingreso: number; // Lo que ingresó hoy
+  egreso?: number; // Lo que salió hoy
   finalized?: boolean; // Si fue guardado para el historial
   transferId?: string; // ID de la transferencia que generó este ingreso
   // processedTransferIds?: string[]; // DEPRECATED

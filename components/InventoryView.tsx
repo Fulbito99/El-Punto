@@ -1,13 +1,13 @@
 import React, { useMemo, useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Category, Product, DailyEntry, Sale } from '../types';
-import { Package, CheckCircle, Save, Info, TrendingDown, Plus, Box, Search, ScanBarcode, X, Edit, History } from 'lucide-react';
+import { Package, CheckCircle, Save, Info, TrendingDown, Plus, Minus, Box, Search, ScanBarcode, X, Edit, History } from 'lucide-react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import { getSalesForDate } from '../src/services/sales';
 import { getYesterday, getCurrentDateAR } from '../src/utils/dates';
 import { SALES_CATEGORIES } from '../constants';
 import { motion } from 'framer-motion';
 
-import { updateEntryService, subscribeEntries } from '../src/services/inventory';
+import { updateEntryService, subscribeEntries, updateMultipleEntriesService } from '../src/services/inventory';
 import { findProductInExternalDb, subscribeIncomingTransfers, ExternalTransfer, fetchExternalProducts, getTransfersForDate } from '../src/services/externalDb';
 
 // Componente de input que maneja el estado localmente y guarda con debounce
@@ -141,20 +141,19 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
     }
   }, [showScanner]);
 
-  // Incoming Transfers Effect
-  useEffect(() => {
-    // Defines "La Central: Guardia" as target
-    const MY_LOCALE_ID = 'locale-1';
+  // Incoming/Outgoing Transfers Effect
+  const MY_LOCALE_ID = 'locale-1';
 
-    // Helper to check if transfer is from today
-    const isToday = (dateStr: string) => {
-      if (!dateStr) return false;
+  useEffect(() => {
+
+    // Helper to check if transfer matches current view date
+    const isSameDate = (transferDateStr: string) => {
+      if (!transferDateStr) return false;
       // Format "D/M/YYYY, HH:mm:ss"
-      const [datePart] = dateStr.split(',');
+      const [datePart] = transferDateStr.split(',');
       const [day, month, year] = datePart.split('/');
 
-      const todayAr = getCurrentDateAR();
-      const [y, m, d] = todayAr.split('-').map(Number);
+      const [y, m, d] = currentDate.split('-').map(Number); // currentDate is YYYY-MM-DD
 
       return parseInt(day) === d &&
         parseInt(month) === m &&
@@ -162,8 +161,6 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
     };
 
     const unsubscribe = subscribeIncomingTransfers(MY_LOCALE_ID, async (transfers) => {
-      const todayDate = getCurrentDateAR();
-
       // Store ALL transfers for history view
       setRecentTransfers(transfers);
 
@@ -177,13 +174,13 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
       });
       setExternalProductDetails(prev => ({ ...prev, ...detailsMap }));
 
-      const todayTransfers = transfers.filter(t => isToday(t.date));
-      // Run Reconcile for Today
-      await runReconciliation(todayTransfers, productsRef.current, entriesRef.current, todayDate, detailsMap);
+      const relevantTransfers = transfers.filter(t => isSameDate(t.date));
+      // Run Reconcile for Current Date
+      await runReconciliation(relevantTransfers, productsRef.current, entriesRef.current, currentDate, detailsMap);
     });
 
     return () => unsubscribe();
-  }, []); // Empty dependency array - we use refs!
+  }, [currentDate]); // Re-subscribe if date changes to ensure correct matching logic runs
 
   // REUSABLE RECONCILIATION LOGIC
   const runReconciliation = async (
@@ -206,19 +203,22 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
       const normalize = (s: string) => s.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       const targetName = normalize(t.productName);
 
-      let localProd = currentProducts.find(p => normalize(p.name) === targetName);
+      let localProds: Product[] = [];
 
-      // A2. Try fuzzy match (Includes) - Handles "Galletita" vs "Galletitas"
-      if (!localProd && targetName.length > 5) {
-        localProd = currentProducts.find(p => {
+      // 1. Exact Name Match
+      localProds = currentProducts.filter(p => normalize(p.name) === targetName);
+
+      // 2. Fuzzy Name Match (If no exact match)
+      if (localProds.length === 0 && targetName.length > 5) {
+        localProds = currentProducts.filter(p => {
           const n = normalize(p.name);
           return (n.includes(targetName) || targetName.includes(n)) && n.length > 5;
         });
       }
 
-      // B. Match by SKU (Using External Details)
-      if (!localProd && extDetail) {
-        localProd = currentProducts.find(p => {
+      // 3. SKU Match (If no name match)
+      if (localProds.length === 0 && extDetail) {
+        localProds = currentProducts.filter(p => {
           if (!p.barcodes || p.barcodes.length === 0) return false;
           const matchMain = extDetail.sku && p.barcodes.includes(extDetail.sku);
           const matchAdd = extDetail.additionalSkus && extDetail.additionalSkus.some((sku: string) => p.barcodes?.includes(sku));
@@ -226,17 +226,18 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
         });
       }
 
-      // C. Match by ID as Barcode (Direct fallback)
-      if (!localProd) {
-        localProd = currentProducts.find(p => p.barcodes && p.barcodes.includes(t.productId));
+      // 4. ID Match (If no other match)
+      if (localProds.length === 0) {
+        localProds = currentProducts.filter(p => p.barcodes && p.barcodes.includes(t.productId));
       }
 
-      if (localProd) {
+      // Add transfer to ALL matched products
+      localProds.forEach(localProd => {
         const list = transfersByLocalId.get(localProd.id) || [];
         list.push(t);
         transfersByLocalId.set(localProd.id, list);
         processedProductIds.add(localProd.id);
-      }
+      });
     });
 
     // 2. Identify products that had transfers processed previously but might have them deleted now
@@ -251,74 +252,42 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
     });
 
     // 3. Process each affected product
-    const promises: Promise<void>[] = [];
+    const updates: Record<string, Partial<DailyEntry>> = {};
+    let changeCount = 0;
 
     processedProductIds.forEach(productId => {
-      const incomingTransfers = transfersByLocalId.get(productId) || [];
+      const allTransfers = transfersByLocalId.get(productId) || [];
       const entry = currentEntries.find(e => e.productId === productId && e.date === targetDate);
 
-      const currentProcessedData = entry?.processedTransferData || {};
-      const newProcessedData = { ...currentProcessedData };
-      let netIngresoDiff = 0;
-      let changed = false;
+      let totalIngreso = 0;
+      let totalEgreso = 0;
+      const finalProcessedData: Record<string, number> = {};
 
-      const incomingIds = new Set(incomingTransfers.map(t => t.id));
-
-
-
-      // A. Handle Adds and Updates (incoming -> local)
-      incomingTransfers.forEach(t => {
-        const prevQty = currentProcessedData[t.id] || 0;
-        // User Requirement: Treat negative quantities (source deduction) as positive (ingress)
-        const trueQty = Math.abs(t.quantity);
-
-        if (prevQty !== trueQty) {
-          netIngresoDiff += (trueQty - prevQty);
-          newProcessedData[t.id] = trueQty;
-          changed = true;
+      allTransfers.forEach(t => {
+        if (t.destinationLocaleId === MY_LOCALE_ID) {
+          totalIngreso += Math.abs(t.quantity);
+        } else if (t.sourceLocaleId === MY_LOCALE_ID) {
+          totalEgreso += Math.abs(t.quantity);
         }
+        finalProcessedData[t.id] = Math.abs(t.quantity);
       });
 
-      // B. Handle Deletions (local -> incoming)
-      Object.keys(currentProcessedData).forEach(tId => {
-        if (!incomingIds.has(tId)) {
-          const prevQty = currentProcessedData[tId];
-          netIngresoDiff -= prevQty;
-          delete newProcessedData[tId];
-          changed = true;
-        }
-      });
+      const currentIngreso = entry?.ingreso || 0;
+      const currentEgreso = entry?.egreso || 0;
 
-      // C. Commit changes if any OR if Ingreso is desynchronized (less than transfer sum)
-      const transferSum = Object.values(newProcessedData).reduce((sum, q) => sum + (q as number), 0);
-      const proposedIngreso = Math.max(0, (entry?.ingreso || 0) + netIngresoDiff);
-
-      // Force update if calculated income is less than what transfers dictate (Audit fix)
-      if (changed || proposedIngreso < transferSum) {
-
-        let finalIngreso = proposedIngreso;
-        if (proposedIngreso < transferSum) {
-          console.warn(`Product ${productId} desync deteced: Income ${proposedIngreso} < TransferSum ${transferSum}. Auto-correcting.`);
-          finalIngreso = transferSum;
-        }
-
-        const currentStock = entry?.stock || 0;
-        const currentFinalized = entry?.finalized || false;
-
-        const updatePromise = updateEntryService({
-          productId: productId,
-          date: targetDate,
-          ingreso: finalIngreso,
-          stock: currentStock,
-          finalized: currentFinalized,
-          processedTransferData: newProcessedData
-        });
-
-
-
-        promises.push(updatePromise);
+      if (totalIngreso !== currentIngreso || totalEgreso !== currentEgreso) {
+        updates[productId] = {
+          ingreso: totalIngreso,
+          egreso: totalEgreso,
+          processedTransferData: finalProcessedData
+        };
+        changeCount++;
       }
     });
+
+    if (changeCount > 0) {
+      await updateMultipleEntriesService(targetDate, updates);
+    }
 
     // Clear local overrides for any product involved in the sync
     setUnsavedChanges(prev => {
@@ -335,8 +304,6 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
       });
       return modified ? next : prev;
     });
-
-    await Promise.all(promises);
   };
 
   // Auto-correct negative income values (Self-healing)
@@ -374,9 +341,9 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
   const isFinalized = categoryEntries.length > 0 && categoryEntries.every(e => e.finalized);
 
   const rows = filteredProducts.map(p => {
-    const today = entries.find(e => e.productId === p.id && e.date === currentDate) || { stock: 0, ingreso: 0, finalized: false };
+    const today = entries.find(e => e.productId === p.id && e.date === currentDate) || { stock: 0, ingreso: 0, egreso: 0, finalized: false };
     const yesterdayDate = getYesterdayDate(currentDate);
-    const yesterday = entries.find(e => e.productId === p.id && e.date === yesterdayDate) || { stock: 0, ingreso: 0 };
+    const yesterday = entries.find(e => e.productId === p.id && e.date === yesterdayDate) || { stock: 0, ingreso: 0, egreso: 0 };
     const hasYesterday = entries.some(e => e.productId === p.id && e.date === yesterdayDate);
 
     // Get sales for this product
@@ -384,18 +351,23 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
     const totalSales = productSales.reduce((sum, s) => sum + s.quantity, 0);
 
     // Calculate expected values
-    const proyectadoAyer = yesterday.stock + yesterday.ingreso;
+    // DS Ayer = StockAyer + IngresoAyer - EgresoAyer
+    const isLocal = inventoryType === 'local';
+    const proyectadoAyer = isLocal
+      ? yesterday.stock + (yesterday.ingreso || 0) - (yesterday.egreso || 0)
+      : yesterday.stock + (yesterday.ingreso || 0);
 
     // Get local unsaved overrides
     const localChanges = unsavedChanges[p.id] || {};
 
     // Merge props with local state
-    const displayStock = localChanges.stock !== undefined ? localChanges.stock : today.stock;
-    const displayIngreso = localChanges.ingreso !== undefined ? localChanges.ingreso : today.ingreso;
+    const displayStock = localChanges.stock !== undefined ? localChanges.stock : (today.stock || 0);
+    const displayIngreso = localChanges.ingreso !== undefined ? localChanges.ingreso : (today.ingreso || 0);
+    const displayEgreso = (today.egreso || 0);
 
     // Calculate projected today
-    const proyectadoHoy = showSales
-      ? displayStock + displayIngreso - totalSales
+    const proyectadoHoy = isLocal
+      ? displayStock + displayIngreso - displayEgreso - totalSales
       : displayStock + displayIngreso;
 
     const difference = hasYesterday ? (displayStock - proyectadoAyer) : 0;
@@ -404,6 +376,7 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
       product: p,
       stock: displayStock,
       ingreso: displayIngreso,
+      egreso: displayEgreso,
       ventas: totalSales,
       esperadoDeAyer: proyectadoAyer,
       diaSiguiente: proyectadoHoy,
@@ -628,7 +601,7 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
                   )}
                 </div>
 
-                <div className={`grid ${showSales ? 'grid-cols-3' : 'grid-cols-2'} gap-3`}>
+                <div className={`grid ${isAdmin ? (showSales ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-3') : 'grid-cols-2'} gap-3`}>
                   <div className="flex flex-col gap-2">
                     <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest text-center">Stock Real</label>
                     <input
@@ -644,39 +617,44 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
                   </div>
                   <div className="flex flex-col gap-2">
                     <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest text-center">Ingresos</label>
-                    <div className="flex gap-1">
-                      <input
-                        type="number"
-                        value={row.ingreso === 0 ? '' : row.ingreso}
-                        onChange={(e) => {
-                          // Handle delete (empty string) as 0, which will be clamped to transferSum in handleLocalUpdate
-                          const val = e.target.value === '' ? 0 : Number(e.target.value);
-                          handleLocalUpdate(row.product.id, 'ingreso', val);
-                        }}
-                        readOnly={row.finalized} // Only read-only if finalized. Otherwise editable (with constraint)
-                        disabled={row.finalized || isSaving}
-                        className={`w-full border-2 focus:bg-white focus:shadow-md rounded-[1.25rem] px-2 py-4 font-black text-gray-800 text-center text-2xl transition-all outline-none ${row.finalized
-                          ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed'
-                          : 'bg-gray-50 border-gray-200 focus:border-green-400 placeholder-gray-300'}`} // Changed style back to white bg when editable
-                        placeholder="0"
-                      />
+                    <div className="flex items-center gap-1">
+                      <div
+                        className={`flex-1 border-2 rounded-[1.25rem] px-2 py-4 font-black text-center text-2xl transition-all ${row.ingreso > 0
+                          ? 'bg-green-50 border-green-200 text-green-600'
+                          : 'bg-white border-gray-200 text-gray-400'}`}
+                      >
+                        {row.ingreso || 0}
+                      </div>
+
                       <button
                         onClick={() => {
-                          const valStr = prompt('¿Cuánto deseas sumar al ingreso actual?');
-                          if (valStr) {
-                            const val = Number(valStr);
+                          const currentVal = row.ingreso || 0;
+                          const input = prompt(`Ingresar cantidad a sumar (o negativo para restar). Actual: ${currentVal}`, '0');
+                          if (input !== null) {
+                            const val = parseInt(input, 10);
                             if (!isNaN(val) && val !== 0) {
-                              handleLocalUpdate(row.product.id, 'ingreso', (row.ingreso || 0) + val);
+                              handleLocalUpdate(row.product.id, 'ingreso', currentVal + val);
                             }
                           }
                         }}
-                        className="bg-green-50 text-green-600 hover:bg-green-100 rounded-[1.25rem] w-12 flex items-center justify-center transition-colors px-1 border border-green-100"
-                        title="Sumar al ingreso actual"
+                        disabled={row.finalized || isSaving}
+                        className="w-14 flex items-center justify-center bg-green-50 text-green-600 rounded-[1.25rem] hover:bg-green-100 active:scale-95 transition-all border border-green-100 self-stretch"
+                        title="Ajustar Ingreso"
                       >
-                        <Plus size={20} strokeWidth={3} />
+                        <Plus size={24} strokeWidth={3} />
                       </button>
                     </div>
                   </div>
+
+                  {isAdmin && inventoryType === 'local' && (
+                    <div className="flex flex-col gap-2">
+                      <label className="text-[9px] font-black text-orange-600 uppercase tracking-widest text-center">Salidas</label>
+                      <div className={`w-full border-2 rounded-[1.25rem] px-2 py-4 font-black text-center text-2xl transition-all ${row.egreso > 0 ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-gray-200 text-gray-400'}`}>
+                        {row.egreso || 0}
+                      </div>
+                    </div>
+                  )}
+
                   {showSales && (
                     <div className="flex flex-col gap-2">
                       <label className="text-[9px] font-black text-purple-600 uppercase tracking-widest text-center flex items-center justify-center gap-1">

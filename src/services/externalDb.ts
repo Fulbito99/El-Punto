@@ -1,6 +1,17 @@
-
 import { initializeApp, getApp, getApps, FirebaseApp } from "firebase/app";
-import { getFirestore, collection, query, where, getDocs, limit, doc, getDoc } from "firebase/firestore";
+import {
+    getFirestore,
+    collection,
+    query,
+    where,
+    getDocs,
+    limit,
+    doc,
+    getDoc,
+    onSnapshot,
+    orderBy,
+    or
+} from "firebase/firestore";
 
 // Configuration for the external database (Deposito Inventory)
 const externalFirebaseConfig = {
@@ -54,7 +65,6 @@ export const findProductInExternalDb = async (barcode: string): Promise<string |
         return null;
     }
 };
-// ... (existing code)
 
 export interface ExternalTransfer {
     id: string;
@@ -64,15 +74,23 @@ export interface ExternalTransfer {
     date: string; // "D/M/YYYY, HH:mm:ss"
     destinationLocaleId: string;
     sourceLocaleId: string;
-    // Add other fields if necessary
 }
 
-import { onSnapshot, orderBy } from "firebase/firestore";
+// Helper to parse date string "DD/MM/YYYY, HH:mm:ss"
+function parseDateStr(dateStr: string): number {
+    if (!dateStr) return 0;
+    try {
+        const [dStr, tStr] = dateStr.split(', ');
+        const [day, month, year] = dStr.split('/').map(Number);
+        const [hours, minutes, seconds] = tStr ? tStr.split(':').map(Number) : [0, 0, 0];
+        return new Date(year, month - 1, day, hours, minutes, seconds).getTime();
+    } catch (e) {
+        return 0;
+    }
+}
 
 /**
- * Subscribes to incoming transfers for a specific locale.
- * Filters for transfers where destinationLocaleId matches.
- * Note: Ideally, we should filter by date too, but for now we'll fetch recent.
+ * Subscribes to transfers for a specific locale (both incoming and outgoing).
  */
 export const subscribeIncomingTransfers = (
     localeId: string,
@@ -81,34 +99,33 @@ export const subscribeIncomingTransfers = (
     try {
         const transfersRef = collection(externalDb, "transfers");
 
-        // Use a simple query without sorting to avoid index/format issues.
-        // We catch strict recently items by a reasonably high limit.
+        // Removed orderBy timestamp because some transfers (e.g. from La Central) lack this field
         const q = query(
             transfersRef,
-            where("destinationLocaleId", "==", localeId),
+            or(
+                where("destinationLocaleId", "==", localeId),
+                where("sourceLocaleId", "==", localeId)
+            ),
             limit(500)
         );
 
         return onSnapshot(q, (snapshot) => {
-            const transfers = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            })) as ExternalTransfer[];
+            const formatDate = (date: Date) => {
+                const d = String(date.getDate()).padStart(2, '0');
+                const m = String(date.getMonth() + 1).padStart(2, '0');
+                const y = date.getFullYear();
+                return `${d}/${m}/${y}`;
+            };
 
-            // Client-side sort (Newest first)
-            transfers.sort((a, b) => {
-                try {
-                    const parse = (d: string) => {
-                        if (!d) return 0;
-                        const [datePart] = d.split(',');
-                        const [day, month, year] = datePart.split('/').map(Number);
-                        return new Date(year, month - 1, day).getTime();
-                    }
-                    return parse(b.date) - parse(a.date);
-                } catch (e) {
-                    return 0;
-                }
-            });
+            const todayPrefix = formatDate(new Date());
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const yesterdayPrefix = formatDate(yesterday);
+
+            const transfers = snapshot.docs
+                .map(doc => ({ id: doc.id, ...doc.data() } as ExternalTransfer))
+                .filter(t => t.date && (t.date.startsWith(todayPrefix) || t.date.startsWith(yesterdayPrefix)))
+                .sort((a, b) => parseDateStr(b.date) - parseDateStr(a.date));
 
             callback(transfers);
         }, (error) => {
@@ -120,32 +137,42 @@ export const subscribeIncomingTransfers = (
     }
 };
 
+export interface ExternalProduct {
+    id: string;
+    sku: string;
+    additionalSkus: string[];
+    name: string;
+}
+
 /**
  * Fetches details for a list of product IDs from the external database.
- * Used to get SKUs for matching.
  */
-export const fetchExternalProducts = async (productIds: string[]) => {
-    if (!productIds.length) return [];
-
-    // Firestore 'in' query is limited to 10. We'll fetch individually in parallel for simplicity 
-    // and because we don't expect huge numbers in this view (last 50 transfers, maybe 20 unique products).
-    // Or we could chunk it. Let's do individual processing which is robust.
-
+export const fetchExternalProducts = async (productIds: string[]): Promise<ExternalProduct[]> => {
+    if (productIds.length === 0) return [];
+    const cachedData = localStorage.getItem('cache_external_prods');
+    const cache: Record<string, ExternalProduct> = cachedData ? JSON.parse(cachedData) : {};
+    const missingIds = productIds.filter(id => !cache[id]);
+    if (missingIds.length === 0) {
+        return productIds.map(id => cache[id]);
+    }
     try {
-        const uniqueIds = Array.from(new Set(productIds));
-        const promises = uniqueIds.map(id => getDoc(doc(externalDb, 'products', id)));
+        const uniqueMissing = Array.from(new Set(missingIds));
+        const promises = uniqueMissing.map(id => getDoc(doc(externalDb, 'products', id)));
         const snapshots = await Promise.all(promises);
-
-        return snapshots.map(snap => {
-            if (!snap.exists()) return null;
-            const data = snap.data();
-            return {
-                id: snap.id,
-                sku: data.sku,
-                additionalSkus: data.additionalSkus || [],
-                name: data.name
-            };
-        }).filter(p => p !== null);
+        snapshots.forEach(snap => {
+            if (snap.exists()) {
+                const data = snap.data();
+                const prod = {
+                    id: snap.id,
+                    sku: data.sku,
+                    additionalSkus: data.additionalSkus || [],
+                    name: data.name
+                } as ExternalProduct;
+                cache[snap.id] = prod;
+            }
+        });
+        localStorage.setItem('cache_external_prods', JSON.stringify(cache));
+        return productIds.map(id => cache[id] || ({ id, name: 'Desconocido', sku: '', additionalSkus: [] } as ExternalProduct));
     } catch (error) {
         console.error("Error fetching external products:", error);
         return [];
@@ -154,34 +181,29 @@ export const fetchExternalProducts = async (productIds: string[]) => {
 
 /**
  * Fetches transfers for a specific locale and date string.
- * Since specific index might not exist for exact string match on 'date',
- * we fetch recent ones and filter in client (safer and no index needed).
  */
 export const getTransfersForDate = async (localeId: string, dateString: string): Promise<ExternalTransfer[]> => {
     try {
         const transfersRef = collection(externalDb, "transfers");
-        // Limit to 200 should cover a few days easily
-        const q = query(
-            transfersRef,
-            where("destinationLocaleId", "==", localeId),
-            limit(500)
-        );
+        // Removed orderBy timestamp to ensure we get transfers that miss this field
+        const qIncoming = query(transfersRef, where("destinationLocaleId", "==", localeId), limit(500));
+        const qOutgoing = query(transfersRef, where("sourceLocaleId", "==", localeId), limit(500));
 
-        const snapshot = await getDocs(q);
+        const [snapIn, snapOut] = await Promise.all([getDocs(qIncoming), getDocs(qOutgoing)]);
+        const snapshot = [...snapIn.docs, ...snapOut.docs];
+
         const results: ExternalTransfer[] = [];
-
-        // Target format from user input usually "YYYY-MM-DD" or similar, 
-        // but transfer.date is "DD/MM/YYYY, HH:mm:ss"
-        // We need to parse dateString (which is likely YYYY-MM-DD from app state)
-        // and match against transfer.date
-
-        const [y, m, d] = dateString.split('-').map(Number); // 2026, 1, 31
+        const [y, m, d] = dateString.split('-').map(Number);
+        const seenIds = new Set(); // Dedup because same transfer logic? (shouldn't overlap incoming/outgoing unless self-transfer)
 
         snapshot.forEach(doc => {
+            if (seenIds.has(doc.id)) return;
+            seenIds.add(doc.id);
             const data = doc.data() as ExternalTransfer;
-            const tDate = data.date; // "31/01/2026, ..."
+            const tDate = data.date;
             if (!tDate) return;
 
+            // Handle date format "DD/MM/YYYY, HH:mm:ss"
             const [datePart] = tDate.split(',');
             const [tDay, tMonth, tYear] = datePart.split('/').map(Number);
 
@@ -190,7 +212,8 @@ export const getTransfersForDate = async (localeId: string, dateString: string):
             }
         });
 
-        return results;
+        // Sort results by date desc
+        return results.sort((a, b) => parseDateStr(b.date) - parseDateStr(a.date));
     } catch (error) {
         console.error("Error getting transfers for date:", error);
         return [];

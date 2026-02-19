@@ -66,6 +66,7 @@ export const subscribeEntries = (callback: (data: DailyEntry[]) => void, dateRan
                 date: d.date,
                 stock: d.stock,
                 ingreso: d.ingreso,
+                egreso: d.egreso,
                 finalized: d.finalized,
                 processedTransferData: d.processedTransferData
             } as DailyEntry;
@@ -137,6 +138,25 @@ export const unfinalizeEntriesService = async (entries: DailyEntry[]) => {
         finalized: false
     }));
     await Promise.all(promises);
+};
+
+export const updateMultipleEntriesService = async (date: string, updates: Record<string, Partial<DailyEntry>>) => {
+    const { writeBatch, doc } = await import('firebase/firestore');
+    const batch = writeBatch(db);
+
+    Object.entries(updates).forEach(([productId, changes]) => {
+        const id = `${date}_${productId}`;
+        const docRef = doc(db, ENTRIES_COL, id);
+
+        // Strip undefined
+        const safeEntry = Object.fromEntries(
+            Object.entries(changes).filter(([_, v]) => v !== undefined)
+        );
+
+        batch.set(docRef, { ...safeEntry, productId, date }, { merge: true });
+    });
+
+    await batch.commit();
 };
 
 
