@@ -10,8 +10,166 @@ import { motion } from 'framer-motion';
 import { updateEntryService, subscribeEntries, updateMultipleEntriesService } from '../src/services/inventory';
 import { findProductInExternalDb, subscribeIncomingTransfers, ExternalTransfer, fetchExternalProducts, getTransfersForDate } from '../src/services/externalDb';
 
-// Componente de input que maneja el estado localmente y guarda con debounce
-// REMOVED DEBOUNCED INPUT
+const InventoryItem = React.memo(({ row, isAdmin, isSaving, inventoryType, showSales, handleLocalUpdate }: {
+  row: any,
+  isAdmin: boolean,
+  isSaving: boolean,
+  inventoryType?: string,
+  showSales: boolean,
+  handleLocalUpdate: (id: string, field: 'stock' | 'ingreso', val: number) => void
+}) => {
+  return (
+    <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-200 p-6 flex flex-col gap-6">
+      <div className="flex justify-between items-start">
+        <div className="flex flex-col gap-1">
+          <h3 className="font-black text-gray-800 text-2xl uppercase tracking-tighter leading-none flex items-baseline gap-2">
+            {row.product.name}
+            <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full lowercase ring-1 ring-blue-100 italic">
+              {row.product.unit || 'u'}
+            </span>
+          </h3>
+          {isAdmin && row.hasYesterday && (
+            <div className="flex items-center gap-1.5 opacity-80">
+              <div className="w-1.5 h-1.5 rounded-full bg-amber-500"></div>
+              <span className="font-medium text-gray-500 text-[10px] uppercase tracking-widest">
+                Ayer: {row.esperadoDeAyer}
+              </span>
+            </div>
+          )}
+        </div>
+        {isAdmin && (
+          <div className={`flex flex-col items-center min-w-[70px] px-3 py-2 rounded-2xl ring-1 ring-inset ${row.difference === 0 ? 'bg-gray-100 text-gray-500 ring-gray-200' :
+            row.difference > 0 ? 'bg-green-50 text-green-600 ring-green-200' : 'bg-red-50 text-red-600 ring-red-200'
+            }`}>
+            <span className="text-[8px] font-black uppercase tracking-[0.2em] mb-0.5">Diferencia</span>
+            <span className="text-xl font-black leading-none">
+              {row.difference > 0 ? '+' : ''}{row.difference}
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className={`grid ${isAdmin ? (showSales ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-3') : 'grid-cols-2'} gap-3`}>
+        <div className="flex flex-col gap-2">
+          <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest text-center">Stock Real</label>
+          <input
+            type="number"
+            value={row.stock === 0 ? '' : row.stock}
+            onChange={(e) => handleLocalUpdate(row.product.id, 'stock', e.target.value === '' ? 0 : Number(e.target.value))}
+            disabled={row.finalized || isSaving}
+            className={`w-full border-2 focus:bg-white focus:shadow-md rounded-[1.25rem] px-2 py-4 font-black text-gray-800 text-center text-2xl transition-all outline-none ${row.finalized
+              ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed'
+              : 'bg-gray-50 border-gray-200 focus:border-blue-400 placeholder-gray-300'}`}
+            placeholder="0"
+          />
+        </div>
+        <div className="flex flex-col gap-2">
+          <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest text-center">Ingresos</label>
+          <div className="flex items-center gap-1">
+            <div
+              className={`flex-1 border-2 rounded-[1.25rem] px-2 py-4 font-black text-center text-2xl transition-all ${row.ingreso > 0
+                ? 'bg-green-50 border-green-200 text-green-600'
+                : 'bg-white border-gray-200 text-gray-400'}`}
+            >
+              {row.ingreso || 0}
+            </div>
+
+            <button
+              onClick={() => {
+                const currentVal = row.ingreso || 0;
+                const input = prompt(`Ingresar cantidad a sumar (o negativo para restar). Actual: ${currentVal}`, '0');
+                if (input !== null) {
+                  const val = parseInt(input, 10);
+                  if (!isNaN(val) && val !== 0) {
+                    handleLocalUpdate(row.product.id, 'ingreso', currentVal + val);
+                  }
+                }
+              }}
+              disabled={row.finalized || isSaving}
+              className="w-14 flex items-center justify-center bg-green-50 text-green-600 rounded-[1.25rem] hover:bg-green-100 active:scale-95 transition-all border border-green-100 self-stretch"
+              title="Ajustar Ingreso"
+            >
+              <Plus size={24} strokeWidth={3} />
+            </button>
+          </div>
+        </div>
+
+        {isAdmin && inventoryType === 'local' && (
+          <div className="flex flex-col gap-2">
+            <label className="text-[9px] font-black text-orange-600 uppercase tracking-widest text-center">Salidas</label>
+            <div className={`w-full border-2 rounded-[1.25rem] px-2 py-4 font-black text-center text-2xl transition-all ${row.egreso > 0 ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-gray-200 text-gray-400'}`}>
+              {row.egreso || 0}
+            </div>
+          </div>
+        )}
+
+        {showSales && (
+          <div className="flex flex-col gap-2">
+            <label className="text-[9px] font-black text-purple-600 uppercase tracking-widest text-center flex items-center justify-center gap-1">
+              <TrendingDown size={10} />
+              Ventas
+            </label>
+            <div className="w-full bg-purple-50 border-2 border-purple-100 rounded-[1.25rem] px-2 py-4 font-black text-purple-600 text-center text-2xl shadow-sm">
+              {row.ventas}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {isAdmin && (
+        <div className="bg-white rounded-[2rem] p-6 flex justify-between items-center text-gray-800 shadow-xl shadow-gray-200/50 relative overflow-hidden group border border-gray-200">
+          <div className="absolute right-0 top-0 w-32 h-32 bg-blue-50 rounded-full -mr-16 -mt-16 group-hover:bg-blue-100 transition-all duration-700"></div>
+
+          <div className="flex flex-col z-10">
+            <span className="text-[9px] font-black text-blue-600 uppercase tracking-[0.2em] mb-2 opacity-80">Pronóstico Mañana</span>
+            <div className="flex items-center gap-3">
+              <span className={`text-4xl font-black leading-none drop-shadow-sm ${row.diaSiguiente < 0 ? 'text-red-500' : 'text-gray-800'}`}>{row.diaSiguiente}</span>
+              <div className="flex flex-col border-l border-gray-200 pl-2">
+                <span className="text-[7px] text-gray-400 font-black leading-tight">STOCK +</span>
+                <span className="text-[7px] text-gray-400 font-black leading-tight">INGRESO</span>
+                {inventoryType === 'local' && (
+                  <span className="text-[7px] text-orange-500 font-black leading-tight uppercase">- SALIDAS</span>
+                )}
+                {showSales && (
+                  <span className="text-[7px] text-purple-500 font-black leading-tight uppercase">- VENTAS</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="h-12 w-[1px] bg-gray-200 mx-2" />
+
+          <div className="flex-1 bg-gray-50 rounded-lg p-2 flex flex-col items-center justify-center gap-1 border border-gray-100">
+            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Ant</span>
+            <span className="text-lg font-black text-gray-700">{row.stock}</span>
+          </div>
+
+          <div className="h-12 w-[1px] bg-gray-200 mx-2" />
+
+          <div className="flex flex-col items-end z-10 text-right">
+            <span className="text-[9px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2">Estado de Cuenta</span>
+            <div className={`text-xs font-black flex items-center gap-1.5 ${row.difference < 0 ? 'text-red-500' :
+              row.difference > 0 ? 'text-green-500' : 'text-gray-400'
+              }`}>
+              {row.hasYesterday ? (
+                <div className="flex flex-col items-end">
+                  <span className="text-base font-black uppercase tracking-tighter">
+                    {row.difference === 0 ? 'Cuadrado' : row.difference > 0 ? 'Sobran' : 'Faltan'}
+                  </span>
+                  <span className="text-[8px] bg-gray-100 px-2 py-0.5 rounded-full mt-1 border border-gray-200 font-bold text-gray-500">
+                    {row.stock} vs {row.esperadoDeAyer}
+                  </span>
+                </div>
+              ) : (
+                <span className="text-[9px] bg-gray-100 px-3 py-1 rounded-full text-gray-500 font-bold border border-gray-200 uppercase">Sin Historial</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
 
 export interface InventoryHandle {
   saveChanges: () => Promise<void>;
@@ -160,6 +318,8 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
         parseInt(year) === y;
     };
 
+    const syncTimerRef = { current: null as any };
+
     const unsubscribe = subscribeIncomingTransfers(MY_LOCALE_ID, async (transfers) => {
       // Store ALL transfers for history view
       setRecentTransfers(transfers);
@@ -175,11 +335,18 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
       setExternalProductDetails(prev => ({ ...prev, ...detailsMap }));
 
       const relevantTransfers = transfers.filter(t => isSameDate(t.date));
-      // Run Reconcile for Current Date
-      await runReconciliation(relevantTransfers, productsRef.current, entriesRef.current, currentDate, detailsMap);
+
+      // Debounce the actual database write
+      if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = setTimeout(async () => {
+        await runReconciliation(relevantTransfers, productsRef.current, entriesRef.current, currentDate, detailsMap);
+      }, 2000); // 2 second debounce
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    };
   }, [currentDate]); // Re-subscribe if date changes to ensure correct matching logic runs
 
   // REUSABLE RECONCILIATION LOGIC
@@ -354,8 +521,8 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
     // DS Ayer = StockAyer + IngresoAyer - EgresoAyer
     const isLocal = inventoryType === 'local';
     const proyectadoAyer = isLocal
-      ? yesterday.stock + (yesterday.ingreso || 0) - (yesterday.egreso || 0)
-      : yesterday.stock + (yesterday.ingreso || 0);
+      ? (yesterday.stock || 0) + (yesterday.ingreso || 0) - (yesterday.egreso || 0)
+      : (yesterday.stock || 0) + (yesterday.ingreso || 0);
 
     // Get local unsaved overrides
     const localChanges = unsavedChanges[p.id] || {};
@@ -387,7 +554,7 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
     };
   });
 
-  const handleLocalUpdate = (productId: string, field: 'stock' | 'ingreso', value: number) => {
+  const handleLocalUpdate = React.useCallback((productId: string, field: 'stock' | 'ingreso', value: number) => {
     // Validation for Ingreso: Cannot go below sum of transfers
     if (field === 'ingreso') {
       const row = rows.find(r => r.product.id === productId);
@@ -408,7 +575,7 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
         [field]: value
       }
     }));
-  };
+  }, [rows]);
 
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
 
@@ -457,109 +624,112 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
   };
 
   return (
-    <div className="flex flex-col gap-4 p-2 md:p-4 max-w-4xl mx-auto w-full">
-      {/* Selector de Rubros */}
-      <div className="flex gap-2 overflow-x-auto no-scrollbar py-1">
-        {categories.map(cat => (
-          <button
-            key={cat.id}
-            onClick={() => {
-              setTappedCat(cat.id);
-              onCategoryChange(cat.id);
-            }}
-            className={`
-                  relative px-6 py-3 rounded-full font-bold text-sm transition-all whitespace-nowrap shadow-sm border
-                  ${tappedCat === cat.id ? 'text-lime-800 scale-105 border-lime-200 z-10' :
-                selectedCategoryId === cat.id ? 'text-lime-700 bg-lime-50 border-lime-200' : 'text-gray-500 bg-white border-gray-200 hover:text-gray-700 hover:bg-gray-50'}
-                `}
-          >
-            {selectedCategoryId === cat.id && (
-              <motion.div
-                layoutId="bubble"
-                className="absolute inset-0 bg-lime-100/50 rounded-full -z-10"
-                transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
-              />
-            )}
-            {cat.name}
-          </button>
-        ))}
-      </div>
-
-      {/* Buscador */}
-      <div className="relative flex gap-2">
-        <div className="relative flex-1">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Search className="h-5 w-5 text-gray-400" />
-          </div>
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl leading-5 bg-white text-gray-800 placeholder-gray-400 focus:outline-none focus:bg-white focus:border-lime-500 focus:ring-1 focus:ring-lime-500 sm:text-sm font-bold transition-all shadow-sm"
-            placeholder="Buscar producto..."
-          />
+    <div className="flex flex-col max-w-4xl mx-auto w-full">
+      {/* Cabecera Fija (Sticky) */}
+      <div className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm pt-4 pb-4 px-2 md:px-4 flex flex-col gap-4 border-b border-gray-100 shadow-sm">
+        {/* Selector de Rubros */}
+        <div className="flex gap-2 overflow-x-auto no-scrollbar py-1">
+          {categories.map(cat => (
+            <button
+              key={cat.id}
+              onClick={() => {
+                setTappedCat(cat.id);
+                onCategoryChange(cat.id);
+              }}
+              className={`
+                    relative px-6 py-3 rounded-full font-bold text-sm transition-all whitespace-nowrap shadow-sm border
+                    ${tappedCat === cat.id ? 'text-lime-800 scale-105 border-lime-200 z-10' :
+                  selectedCategoryId === cat.id ? 'text-lime-700 bg-lime-50 border-lime-200' : 'text-gray-500 bg-white border-gray-200 hover:text-gray-700 hover:bg-gray-50'}
+                  `}
+            >
+              {selectedCategoryId === cat.id && (
+                <motion.div
+                  layoutId="bubble"
+                  className="absolute inset-0 bg-lime-100/50 rounded-full -z-10"
+                  transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                />
+              )}
+              {cat.name}
+            </button>
+          ))}
         </div>
-        {inventoryType === 'local' && (
-          <button
-            onClick={() => setShowScanner(true)}
-            className="bg-white text-gray-500 hover:text-gray-800 hover:bg-gray-50 px-4 rounded-xl transition-colors flex items-center justify-center border border-gray-200 shadow-sm"
-            title="Escanear código"
-          >
-            <ScanBarcode size={24} />
-          </button>
-        )}
-        {inventoryType === 'local' && (
-          <button
-            onClick={() => setShowHistory(true)}
-            className="bg-white text-gray-500 hover:text-gray-800 hover:bg-gray-50 px-4 rounded-xl transition-colors flex items-center justify-center border border-gray-200 shadow-sm"
-            title="Historial de Transferencias"
-          >
-            <History size={24} />
-          </button>
-        )}
-        {inventoryType === 'local' && (
-          <button
-            onClick={async () => {
-              if (confirm(`¿Verificar y sincronizar transferencias para la fecha: ${currentDate}?`)) {
-                setIsSaving(true);
-                try {
-                  // 1. Get transfers for date
-                  const transfers = await getTransfersForDate('locale-1', currentDate);
-                  if (transfers.length === 0) {
-                    alert("No se encontraron transferencias para esta fecha.");
+
+        {/* Buscador */}
+        <div className="relative flex gap-2">
+          <div className="relative flex-1">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <Search className="h-5 w-5 text-gray-400" />
+            </div>
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl leading-5 bg-white text-gray-800 placeholder-gray-400 focus:outline-none focus:bg-white focus:border-lime-500 focus:ring-1 focus:ring-lime-500 sm:text-sm font-bold transition-all shadow-sm"
+              placeholder="Buscar producto..."
+            />
+          </div>
+          {inventoryType === 'local' && (
+            <button
+              onClick={() => setShowScanner(true)}
+              className="bg-white text-gray-500 hover:text-gray-800 hover:bg-gray-50 px-4 rounded-xl transition-colors flex items-center justify-center border border-gray-200 shadow-sm"
+              title="Escanear código"
+            >
+              <ScanBarcode size={24} />
+            </button>
+          )}
+          {inventoryType === 'local' && (
+            <button
+              onClick={() => setShowHistory(true)}
+              className="bg-white text-gray-500 hover:text-gray-800 hover:bg-gray-50 px-4 rounded-xl transition-colors flex items-center justify-center border border-gray-200 shadow-sm"
+              title="Historial de Transferencias"
+            >
+              <History size={24} />
+            </button>
+          )}
+          {inventoryType === 'local' && (
+            <button
+              onClick={async () => {
+                if (confirm(`¿Verificar y sincronizar transferencias para la fecha: ${currentDate}?`)) {
+                  setIsSaving(true);
+                  try {
+                    // 1. Get transfers for date
+                    const transfers = await getTransfersForDate('locale-1', currentDate);
+                    if (transfers.length === 0) {
+                      alert("No se encontraron transferencias para esta fecha.");
+                      setIsSaving(false);
+                      return;
+                    }
+
+                    // 2. Fetch details (SKUs)
+                    const detailsMap: Record<string, any> = {};
+                    const tIds = transfers.map(t => t.productId);
+                    const details = await fetchExternalProducts(tIds);
+                    details.forEach(d => { if (d) detailsMap[d.id] = d; });
+
+                    // 3. Reconcile
+                    // We reuse the same logic function (defined below or we extract it)
+                    await runReconciliation(transfers, productsRef.current, entriesRef.current, currentDate, detailsMap);
+
+                    alert(`Sincronización completada. Se revisaron ${transfers.length} transferencias.`);
+                  } catch (e) {
+                    console.error(e);
+                    alert("Error al sincronizar");
+                  } finally {
                     setIsSaving(false);
-                    return;
                   }
-
-                  // 2. Fetch details (SKUs)
-                  const detailsMap: Record<string, any> = {};
-                  const tIds = transfers.map(t => t.productId);
-                  const details = await fetchExternalProducts(tIds);
-                  details.forEach(d => { if (d) detailsMap[d.id] = d; });
-
-                  // 3. Reconcile
-                  // We reuse the same logic function (defined below or we extract it)
-                  await runReconciliation(transfers, productsRef.current, entriesRef.current, currentDate, detailsMap);
-
-                  alert(`Sincronización completada. Se revisaron ${transfers.length} transferencias.`);
-                } catch (e) {
-                  console.error(e);
-                  alert("Error al sincronizar");
-                } finally {
-                  setIsSaving(false);
                 }
-              }
-            }}
-            className="bg-white text-gray-500 hover:text-gray-800 hover:bg-gray-50 px-4 rounded-xl transition-colors flex items-center justify-center border border-gray-200 shadow-sm"
-            title="Sincronizar Manualmente"
-          >
-            <Box size={24} className="text-blue-500" />
-          </button>
-        )}
+              }}
+              className="bg-white text-gray-500 hover:text-gray-800 hover:bg-gray-50 px-4 rounded-xl transition-colors flex items-center justify-center border border-gray-200 shadow-sm"
+              title="Sincronizar Manualmente"
+            >
+              <Box size={24} className="text-blue-500" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Lista de Productos */}
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3 p-2 md:p-4">
         {rows.length === 0 ? (
           <div className="text-center py-12 bg-white rounded-2xl border-2 border-dashed border-gray-200">
             <Package className="mx-auto text-gray-300 mb-2" size={48} />
@@ -569,155 +739,19 @@ const InventoryView = forwardRef<InventoryHandle, Props>(({
           </div>
         ) : (
           <>
-            {rows.map(row => (
-              <div key={row.product.id} className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-200 p-6 flex flex-col gap-6">
-                <div className="flex justify-between items-start">
-                  <div className="flex flex-col gap-1">
-                    <h3 className="font-black text-gray-800 text-2xl uppercase tracking-tighter leading-none flex items-baseline gap-2">
-                      {row.product.name}
-                      <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full lowercase ring-1 ring-blue-100 italic">
-                        {row.product.unit || 'u'}
-                      </span>
-
-                    </h3>
-                    {isAdmin && row.hasYesterday && (
-                      <div className="flex items-center gap-1.5 opacity-80">
-                        <div className="w-1.5 h-1.5 rounded-full bg-amber-500"></div>
-                        <span className="font-medium text-gray-500 text-[10px] uppercase tracking-widest">
-                          Ayer: {row.esperadoDeAyer}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  {isAdmin && (
-                    <div className={`flex flex-col items-center min-w-[70px] px-3 py-2 rounded-2xl ring-1 ring-inset ${row.difference === 0 ? 'bg-gray-100 text-gray-500 ring-gray-200' :
-                      row.difference > 0 ? 'bg-green-50 text-green-600 ring-green-200' : 'bg-red-50 text-red-600 ring-red-200'
-                      }`}>
-                      <span className="text-[8px] font-black uppercase tracking-[0.2em] mb-0.5">Diferencia</span>
-                      <span className="text-xl font-black leading-none">
-                        {row.difference > 0 ? '+' : ''}{row.difference}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                <div className={`grid ${isAdmin ? (showSales ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-3') : 'grid-cols-2'} gap-3`}>
-                  <div className="flex flex-col gap-2">
-                    <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest text-center">Stock Real</label>
-                    <input
-                      type="number"
-                      value={row.stock === 0 ? '' : row.stock}
-                      onChange={(e) => handleLocalUpdate(row.product.id, 'stock', e.target.value === '' ? 0 : Number(e.target.value))}
-                      disabled={row.finalized || isSaving}
-                      className={`w-full border-2 focus:bg-white focus:shadow-md rounded-[1.25rem] px-2 py-4 font-black text-gray-800 text-center text-2xl transition-all outline-none ${row.finalized
-                        ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed'
-                        : 'bg-gray-50 border-gray-200 focus:border-blue-400 placeholder-gray-300'}`}
-                      placeholder="0"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest text-center">Ingresos</label>
-                    <div className="flex items-center gap-1">
-                      <div
-                        className={`flex-1 border-2 rounded-[1.25rem] px-2 py-4 font-black text-center text-2xl transition-all ${row.ingreso > 0
-                          ? 'bg-green-50 border-green-200 text-green-600'
-                          : 'bg-white border-gray-200 text-gray-400'}`}
-                      >
-                        {row.ingreso || 0}
-                      </div>
-
-                      <button
-                        onClick={() => {
-                          const currentVal = row.ingreso || 0;
-                          const input = prompt(`Ingresar cantidad a sumar (o negativo para restar). Actual: ${currentVal}`, '0');
-                          if (input !== null) {
-                            const val = parseInt(input, 10);
-                            if (!isNaN(val) && val !== 0) {
-                              handleLocalUpdate(row.product.id, 'ingreso', currentVal + val);
-                            }
-                          }
-                        }}
-                        disabled={row.finalized || isSaving}
-                        className="w-14 flex items-center justify-center bg-green-50 text-green-600 rounded-[1.25rem] hover:bg-green-100 active:scale-95 transition-all border border-green-100 self-stretch"
-                        title="Ajustar Ingreso"
-                      >
-                        <Plus size={24} strokeWidth={3} />
-                      </button>
-                    </div>
-                  </div>
-
-                  {isAdmin && inventoryType === 'local' && (
-                    <div className="flex flex-col gap-2">
-                      <label className="text-[9px] font-black text-orange-600 uppercase tracking-widest text-center">Salidas</label>
-                      <div className={`w-full border-2 rounded-[1.25rem] px-2 py-4 font-black text-center text-2xl transition-all ${row.egreso > 0 ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-gray-200 text-gray-400'}`}>
-                        {row.egreso || 0}
-                      </div>
-                    </div>
-                  )}
-
-                  {showSales && (
-                    <div className="flex flex-col gap-2">
-                      <label className="text-[9px] font-black text-purple-600 uppercase tracking-widest text-center flex items-center justify-center gap-1">
-                        <TrendingDown size={10} />
-                        Ventas
-                      </label>
-                      <div className="w-full bg-purple-50 border-2 border-purple-100 rounded-[1.25rem] px-2 py-4 font-black text-purple-600 text-center text-2xl shadow-sm">
-                        {row.ventas}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {isAdmin && (
-                  <div className="bg-white rounded-[2rem] p-6 flex justify-between items-center text-gray-800 shadow-xl shadow-gray-200/50 relative overflow-hidden group border border-gray-200">
-                    <div className="absolute right-0 top-0 w-32 h-32 bg-blue-50 rounded-full -mr-16 -mt-16 group-hover:bg-blue-100 transition-all duration-700"></div>
-
-                    <div className="flex flex-col z-10">
-                      <span className="text-[9px] font-black text-blue-600 uppercase tracking-[0.2em] mb-2 opacity-80">Pronóstico Mañana</span>
-                      <div className="flex items-center gap-3">
-                        <span className={`text-4xl font-black leading-none drop-shadow-sm ${row.diaSiguiente < 0 ? 'text-red-500' : 'text-gray-800'}`}>{row.diaSiguiente}</span>
-                        <div className="flex flex-col border-l border-gray-200 pl-2">
-                          <span className="text-[7px] text-gray-400 font-black leading-tight">STOCK +</span>
-                          <span className="text-[7px] text-gray-400 font-black leading-tight">INGRESO</span>
-                          {showSales && (
-                            <span className="text-[7px] text-purple-500 font-black leading-tight uppercase">- VENTAS</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="h-12 w-[1px] bg-gray-200 mx-2" />
-
-                    <div className="flex-1 bg-gray-50 rounded-lg p-2 flex flex-col items-center justify-center gap-1 border border-gray-100">
-                      <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Ant</span>
-                      <span className="text-lg font-black text-gray-700">{row.stock}</span>
-                    </div>
-
-                    <div className="h-12 w-[1px] bg-gray-200 mx-2" />
-
-                    <div className="flex flex-col items-end z-10 text-right">
-                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-[0.2em] mb-2">Estado de Cuenta</span>
-                      <div className={`text-xs font-black flex items-center gap-1.5 ${row.difference < 0 ? 'text-red-500' :
-                        row.difference > 0 ? 'text-green-500' : 'text-gray-400'
-                        }`}>
-                        {row.hasYesterday ? (
-                          <div className="flex flex-col items-end">
-                            <span className="text-base font-black uppercase tracking-tighter">
-                              {row.difference === 0 ? 'Cuadrado' : row.difference > 0 ? 'Sobran' : 'Faltan'}
-                            </span>
-                            <span className="text-[8px] bg-gray-100 px-2 py-0.5 rounded-full mt-1 border border-gray-200 font-bold text-gray-500">
-                              {row.stock} vs {row.esperadoDeAyer}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-[9px] bg-gray-100 px-3 py-1 rounded-full text-gray-500 font-bold border border-gray-200 uppercase">Sin Historial</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
+            <>
+              {rows.map(row => (
+                <InventoryItem
+                  key={row.product.id}
+                  row={row}
+                  isAdmin={isAdmin}
+                  isSaving={isSaving}
+                  inventoryType={inventoryType}
+                  showSales={!!showSales}
+                  handleLocalUpdate={handleLocalUpdate}
+                />
+              ))}
+            </>
 
           </>
         )

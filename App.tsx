@@ -50,7 +50,15 @@ import { Transfer } from './types';
 
 
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'inventory-cocina' | 'inventory-local' | 'reports' | 'sales' | 'settings'>('inventory-cocina');
+  const [activeTab, setActiveTabState] = useState<'inventory-cocina' | 'inventory-local' | 'reports' | 'sales' | 'settings'>(() => {
+    const saved = localStorage.getItem('activeTab');
+    return (saved as any) || 'inventory-cocina';
+  });
+
+  const setActiveTab = (tab: 'inventory-cocina' | 'inventory-local' | 'reports' | 'sales' | 'settings') => {
+    setActiveTabState(tab);
+    localStorage.setItem('activeTab', tab);
+  };
 
   const cocinaInventoryRef = useRef<InventoryHandle>(null);
   const localInventoryRef = useRef<InventoryHandle>(null);
@@ -66,8 +74,20 @@ const App: React.FC = () => {
   const [entries, setEntries] = useState<DailyEntry[]>([]);
 
   const [currentDate, setCurrentDate] = useState(getCurrentDateAR());
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string>('');
-  const [selectedLocalCategoryId, setSelectedLocalCategoryId] = useState<string>('');
+
+  // Persistent Category Selection
+  const [selectedCategoryId, setSelectedCategoryIdState] = useState<string>(() => localStorage.getItem('selectedCategoryId') || '');
+  const setSelectedCategoryId = (id: string) => {
+    setSelectedCategoryIdState(id);
+    localStorage.setItem('selectedCategoryId', id);
+  };
+
+  const [selectedLocalCategoryId, setSelectedLocalCategoryIdState] = useState<string>(() => localStorage.getItem('selectedLocalCategoryId') || '');
+  const setSelectedLocalCategoryId = (id: string) => {
+    setSelectedLocalCategoryIdState(id);
+    localStorage.setItem('selectedLocalCategoryId', id);
+  };
+
   const [isLoading, setIsLoading] = useState(true);
 
   // Debug state with localStorage persistence
@@ -184,11 +204,12 @@ const App: React.FC = () => {
       setProducts(sortedProds);
     });
 
-    // Calculate date range: last 30 days to today
+    // Suscribirse SOLAMENTE a hoy y ayer para ahorrar lecturas (90% de ahorro)
+    // El historial completo se cargará bajo demanda en la vista de Reportes.
     const today = getCurrentDateAR();
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const startDate = thirtyDaysAgo.toISOString().split('T')[0];
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const startDate = yesterday.toISOString().split('T')[0];
 
     const unsubEntries = subscribeEntries(setEntries, {
       startDate,
@@ -210,11 +231,18 @@ const App: React.FC = () => {
     const cocinaCats = categories.filter(c => !c.inventoryType || c.inventoryType === 'cocina');
     const localCats = categories.filter(c => c.inventoryType === 'local');
 
-    if (cocinaCats.length > 0 && !selectedCategoryId) {
-      setSelectedCategoryId(cocinaCats[0].id);
+    if (cocinaCats.length > 0) {
+      const isValid = cocinaCats.some(c => c.id === selectedCategoryId);
+      if (!selectedCategoryId || !isValid) {
+        setSelectedCategoryId(cocinaCats[0].id);
+      }
     }
-    if (localCats.length > 0 && !selectedLocalCategoryId) {
-      setSelectedLocalCategoryId(localCats[0].id);
+
+    if (localCats.length > 0) {
+      const isValid = localCats.some(c => c.id === selectedLocalCategoryId);
+      if (!selectedLocalCategoryId || !isValid) {
+        setSelectedLocalCategoryId(localCats[0].id);
+      }
     }
   }, [categories, selectedCategoryId, selectedLocalCategoryId]);
 

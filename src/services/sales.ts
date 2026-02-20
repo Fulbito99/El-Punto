@@ -24,7 +24,7 @@ export const parseCSV = (csvText: string): { name: string; quantity: number; amo
     const items: { name: string; quantity: number; amount: number }[] = [];
 
     // Header keywords to skip
-    const headerKeywords = ['articulos', 'cantidad', 'importe', 'porcentaje', 'producto'];
+    const headerKeywords = ['articulos', 'cantidad', 'importe', 'porcentaje', 'producto', 'nombre', 'precio'];
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
@@ -35,77 +35,126 @@ export const parseCSV = (csvText: string): { name: string; quantity: number; amo
 
         let name = '';
         let quantity = 0;
+        let amount = 0;
         let parsed = false;
 
         // Strategy 1: Tab separation (Excel copy-paste default)
         if (line.includes('\t')) {
             const parts = line.split('\t');
-            // Expect at least Name and Quantity (indices 0 and 1)
             if (parts.length >= 2) {
                 const pName = parts[0].trim();
                 const pQtyStr = parts[1].trim();
-                // Clean quantity string (remove currency symbols if present, unexpected)
                 const cleanQty = pQtyStr.replace(/[^\d.,]/g, '').replace(',', '.');
                 const pQty = parseFloat(cleanQty);
 
                 if (pName && !isNaN(pQty)) {
-                    let pAmount = 0;
-                    // Try to parse amount from 3rd column if exists
                     if (parts.length >= 3) {
                         const pAmountStr = parts[2].trim();
                         // Remove $ and . (thousands), replace , with .
                         const cleanAmount = pAmountStr.replace(/[$]/g, '').replace(/\./g, '').replace(',', '.').trim();
                         const parsedAmount = parseFloat(cleanAmount);
-                        if (!isNaN(parsedAmount)) {
-                            pAmount = parsedAmount;
-                        }
+                        if (!isNaN(parsedAmount)) amount = parsedAmount;
                     }
-                    items.push({ name: pName, quantity: pQty, amount: pAmount });
+                    items.push({ name: pName, quantity: pQty, amount });
                     parsed = true;
-                    continue; // Skip the fallback push
+                    continue;
+                }
+            }
+        }
+
+        // Strategy 1.5: Semicolon separation (Common in Spanish CSV)
+        if (!parsed && line.includes(';')) {
+            const parts = line.split(';');
+            // Basic check: Name;Qty[;Amount]
+            if (parts.length >= 2) {
+                const pName = parts[0].trim();
+                const pQtyStr = parts[1].trim();
+                // Check if 2nd part looks like a number
+                const cleanQty = pQtyStr.replace(',', '.'); // Simple replace for CSV
+                const pQty = parseFloat(cleanQty);
+
+                if (pName && !isNaN(pQty)) {
+                    if (parts.length >= 3) {
+                        const pAmountStr = parts[2].trim();
+                        const cleanAmount = pAmountStr.replace(/[$.]/g, '').replace(',', '.').trim();
+                        const parsedAmount = parseFloat(cleanAmount);
+                        if (!isNaN(parsedAmount)) amount = parsedAmount;
+                    }
+                    items.push({ name: pName, quantity: pQty, amount });
+                    parsed = true;
+                    continue;
                 }
             }
         }
 
         // Strategy 2: Regex for space aligned columns with AMOUNT
-        // Pattern: [Product Name] [Quantity] [Amount] [Percentage]
-        // Example: Actron 600   4.00   $ 5.600,00   1.14%
+        // CHANGED: ^(.+?) to ^(.+) (Greedy) to swallow "600" in "Product 600" if followed by valid Qty/Amt
         if (!parsed) {
-            // Capture Name | Quantity | Amount
-            const regex = /^(.+?)\s+(\d+(?:[.,]\d+)?)\s+((?:\$|USD)?\s?[\d.,]+).*$/i;
+            const regex = /^(.+)\s+(\d+(?:[.,]\d+)?)\s+((?:\$|USD)?\s?[\d.,]+).*$/i;
             const match = line.match(regex);
             if (match) {
                 name = match[1].trim();
                 const qtyStr = match[2].replace(',', '.');
                 quantity = parseFloat(qtyStr);
 
-                // Process Amount
                 const amountStr = match[3].replace(/[$.]/g, '').replace(',', '.').trim();
                 let parsedAmount = parseFloat(amountStr);
-                if (isNaN(parsedAmount)) parsedAmount = 0;
+                if (!isNaN(parsedAmount)) amount = parsedAmount;
 
-                items.push({ name, quantity, amount: parsedAmount });
+                items.push({ name, quantity, amount });
                 parsed = true;
-                continue; // Skip next check
+                continue;
             }
         }
 
         // Fallback: Default simple split by comma if mostly CSV-like
+        // Only if NO tabs or semicolons were found/handled, and it has commas
         if (!parsed && line.includes(',')) {
-            // Handle simple "Product, Quantity" text
             const parts = line.split(',');
             const lastPart = parts.pop() || '';
-            // Try to see if last part is quantity
             const qtyFn = parseFloat(lastPart.trim());
             if (!isNaN(qtyFn)) {
                 name = parts.join(',').trim();
                 quantity = qtyFn;
                 parsed = true;
+                items.push({ name, quantity, amount: 0 });
             }
         }
 
-        if (parsed && name && quantity > 0) {
-            items.push({ name, quantity, amount: 0 });
+        // Strategy 3: Loose "Name Only" or "Name String" (Default Qty = 1)
+        // If the user says "I don't want to export quantity", we might get lines with just Name
+        // or "Name Category".
+        if (!parsed && line.length > 2) {
+            // Try to see if there is a number at the END that implies quantity?
+            // No, the user specifically said "no quiero que tambien exporte la cantidad".
+            // So we should just take the string as Name.
+
+            // However, we should be careful about header rows that weren't caught.
+            // (Header keywords are handled above).
+
+            // If the line has Tabs/Commas/Semicolons but we failed to find a valid Quantity number in the expected slot,
+            // we might want to just take the first column as Name.
+
+            let potentialName = line;
+
+            if (line.includes('\t')) {
+                potentialName = line.split('\t')[0];
+            } else if (line.includes(';')) {
+                potentialName = line.split(';')[0];
+            } else if (line.includes(',')) {
+                // Be careful with commas in names? 
+                // If we are here, Strategy 2 (Fallback Comma) failed to find a number at the end.
+                // So maybe it's "Name, Category"?
+                potentialName = line.split(',')[0];
+            }
+
+            // Cleanup
+            potentialName = potentialName.trim();
+
+            if (potentialName.length > 1) { // Avoid single char noise
+                items.push({ name: potentialName, quantity: 1, amount: 0 });
+                parsed = true;
+            }
         }
     }
 

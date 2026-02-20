@@ -220,43 +220,122 @@ const SettingsView: React.FC<Props> = ({
                     }
 
                     const text = await file.text();
-                    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-                    // Asumimos formato: Rubro,Producto,Unidad
-                    // Ignorar encabezado si existe
-                    const startIndex = lines[0].toLowerCase().startsWith('rubro') ? 1 : 0;
+                    const lines = text.split('\n').filter(l => l.trim());
+
+                    if (lines.length === 0) return;
+
+                    // 1. Detect Delimiter
+                    const firstLine = lines[0];
+                    let delimiter = ',';
+                    if (firstLine.includes('\t')) delimiter = '\t';
+                    else if (firstLine.includes(';')) delimiter = ';';
+
+                    // Helper to split CSV line respecting quotes
+                    const splitCSV = (line: string, delim: string) => {
+                      const regex = new RegExp(`(?:^|${delim})(\"(?:[^\"]|\"\")*\"|[^${delim}]*)`, 'g');
+                      const matches = [];
+                      let match;
+                      while (match = regex.exec(line)) {
+                        let val = match[1];
+                        if (val.startsWith(delim)) val = val.substring(1); // Should not happen with this regex usually but careful
+                        // Remove quotes
+                        if (val.startsWith('"') && val.endsWith('"')) {
+                          val = val.slice(1, -1).replace(/""/g, '"');
+                        }
+                        matches.push(val.trim());
+                      }
+                      // The regex might not catch the last empty element correctly if simplified, 
+                      // but let's try a standard split for simple cases if no quotes involved
+                      if (!line.includes('"')) {
+                        return line.split(delim).map(s => s.trim());
+                      }
+                      return matches;
+                    };
+
+                    // 2. Detected Headers?
+                    const headerLine = lines[0].toLowerCase();
+                    const hasHeader = headerLine.includes('rubro') || headerLine.includes('producto') || headerLine.includes('categor');
+
+                    let rubroIdx = 0;
+                    let prodIdx = 1;
+                    let unitIdx = 2;
+
+                    let startIndex = 0;
+
+                    if (hasHeader) {
+                      startIndex = 1;
+                      const headers = splitCSV(headerLine, delimiter).map(h => h.toLowerCase());
+
+                      const rIdx = headers.findIndex(h => h.includes('rubro') || h.includes('categor'));
+                      const pIdx = headers.findIndex(h => h.includes('producto') || h.includes('nombre') || h.includes('articul'));
+                      const uIdx = headers.findIndex(h => h.includes('unidad'));
+
+                      if (rIdx !== -1) rubroIdx = rIdx;
+                      if (pIdx !== -1) prodIdx = pIdx;
+                      if (uIdx !== -1) unitIdx = uIdx;
+                    }
 
                     let importCount = 0;
-
-                    // Cache local para no re-escanear todo el tiempo props.categories (que no se actualizan en realtime dentro del loop)
-                    // Iniciamos con los actuales
                     const currentCategories = [...categories];
 
                     for (let i = startIndex; i < lines.length; i++) {
-                      // Parseo simple CSV (considerando comillas)
-                      // Regex para separar por comas pero ignorar comas dentro de comillas
-                      const matches = lines[i].match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g);
-                      if (!matches) continue;
+                      const row = splitCSV(lines[i], delimiter);
+                      if (row.length < 2) continue; // Need at least Rubro+Prod or Prod+Rubro
 
-                      const row = matches.map(m => m.replace(/^"|"$/g, '').trim());
-                      // row[0] = Rubro, row[1] = Producto, row[2] = Unidad
+                      const catName = row[rubroIdx];
+                      const prodName = row[prodIdx];
 
-                      const catName = row[0];
-                      if (!catName) continue;
+                      // Safety: if mapped wrong, verify
+                      if (!catName || !prodName) continue;
 
-                      const prodName = row[1];
-                      const unit = row[2] || 'unidad';
+                      const unit = row[unitIdx] || 'unidad';
+
+                      // Helper to fix common encoding issues (Mojibake)
+                      const fixMojibake = (str: string) => {
+                        if (!str) return str;
+
+                        let fixed = str;
+
+                        // 1. Try robust decode mechanism
+                        try {
+                          // Check for double-encoding signature
+                          if (/[ÃÂ]/.test(fixed)) {
+                            const decoded = decodeURIComponent(escape(fixed));
+                            if (decoded && decoded !== fixed) fixed = decoded;
+                          }
+                        } catch (e) { }
+
+                        // 2. Direct brute-force replacements for stubbornly broken chars
+                        // This handles "GÃ³ndola" explicitly if the above failed
+                        fixed = fixed
+                          .replace(/Ã¡/g, 'á')
+                          .replace(/Ã©/g, 'é')
+                          .replace(/Ã\u00AD/g, 'í') // Soft hyphen often creates issues
+                          .replace(/Ãí/g, 'í')      // Sometimes it appears as Ãí
+                          .replace(/Ã³/g, 'ó')
+                          .replace(/Ãº/g, 'ú')
+                          .replace(/Ã±/g, 'ñ')
+                          .replace(/Ã‘/g, 'Ñ')
+                          .replace(/Â°/g, '°')
+                          .replace(/Ã°/g, '°')
+                          .replace(/Ã¼/g, 'ü');
+
+                        return fixed;
+                      };
+
+                      const cleanCatName = fixMojibake(catName);
+                      const cleanProdName = fixMojibake(prodName);
 
                       // 1. Buscar o Crear Categoría
-                      let targetCat = currentCategories.find(c => c.name.toLowerCase() === catName.toLowerCase());
+                      let targetCat = currentCategories.find(c => c.name.toLowerCase() === cleanCatName.toLowerCase());
 
                       if (!targetCat) {
                         try {
-                          const newId = await onAddCategory(catName);
+                          const newId = await onAddCategory(cleanCatName, currentInventoryType);
                           if (newId && typeof newId === 'string') {
-                            targetCat = { id: newId, name: catName };
+                            targetCat = { id: newId, name: cleanCatName };
                             currentCategories.push(targetCat);
                           } else {
-                            console.error("Error creating category, no ID returned");
                             continue;
                           }
                         } catch (err) {
@@ -266,20 +345,15 @@ const SettingsView: React.FC<Props> = ({
                       }
 
                       // 2. Si hay nombre de producto, buscar o crear
-                      if (prodName && targetCat) {
+                      if (cleanProdName && targetCat) {
                         const existingProd = products.find(p =>
                           p.categoryId === targetCat!.id &&
-                          p.name.toLowerCase() === prodName.toLowerCase()
+                          p.name.toLowerCase() === cleanProdName.toLowerCase()
                         );
 
                         if (!existingProd) {
-                          await onAddProduct(prodName, targetCat.id, unit);
+                          await onAddProduct(cleanProdName, targetCat.id, unit, currentInventoryType);
                           importCount++;
-                        } else {
-                          // Opcional: Actualizar unidad si es diferente?
-                          if (existingProd.unit !== unit) {
-                            onUpdateProduct(existingProd.id, { unit });
-                          }
                         }
                       }
                     }
